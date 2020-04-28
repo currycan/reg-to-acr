@@ -1,4 +1,4 @@
-	BUILD_VERSION   := $(shell cat version)
+BUILD_VERSION   := $(shell cat version)
 BUILD_TIME      := $(shell date "+%F %T")
 COMMIT_SHA1     := $(shell git rev-parse HEAD)
 
