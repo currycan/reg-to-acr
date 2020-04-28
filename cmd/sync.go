@@ -2,89 +2,63 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/signal"
-	"runtime"
-	"sync"
-	"syscall"
-
-	"github.com/currycan/reg-to-acr/core"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/currycan/reg-to-acr/core"
 	"github.com/spf13/cobra"
 )
 
-var version, buildTime, commit string
+var syncOption core.SyncOption
 
-var debug bool
-
-var rootCmd = &cobra.Command{
-	Use:     "imgsync",
-	Short:   "Docker image sync tool",
-	Version: version,
+var syncCmd = &cobra.Command{
+	Use:   "sync",
+	Short: "Sync single image",
 	Long: `
-Docker image sync tool.`,
+Sync single image.`,
+	PreRun: prerun,
 	Run: func(cmd *cobra.Command, args []string) {
-		_ = cmd.Help()
+		if len(args) != 1 {
+			_ = cmd.Help()
+			return
+		}
+		var repo, user, name, tag string
+		ss := strings.Split(args[0], ":")
+		if len(ss) == 1 {
+			tag = "latest"
+		} else {
+			tag = ss[len(ss)-1]
+		}
+		ss = strings.Split(ss[0], "/")
+		switch len(ss) {
+		case 1:
+			name = ss[0]
+		case 2:
+			repo = ss[0]
+			name = ss[1]
+		case 3:
+			repo = ss[0]
+			user = ss[1]
+			name = ss[2]
+		default:
+			logrus.Fatalf("image name format error: %s", args[0])
+		}
+		core.SyncImages(context.Background(), core.Images{&core.Image{
+			Repo: repo,
+			User: user,
+			Name: name,
+			Tag:  tag,
+		}}, &syncOption)
 	},
 }
 
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		logrus.Fatal(err)
-	}
-}
-
 func init() {
-	cobra.OnInitialize(initLog)
-	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "debug mode")
-	rootCmd.SetVersionTemplate(versionTpl())
-}
-
-func initLog() {
-	logrus.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp:   true,
-		TimestampFormat: "2006-01-02 15:04:05",
-	})
-
-	if debug {
-		logrus.SetLevel(logrus.DebugLevel)
-	}
-}
-
-func versionTpl() string {
-	var tpl = `%s
-Name: imgsync
-Version: %s
-Arch: %s
-BuildTime: %s
-CommitID: %s
-`
-	return fmt.Sprintf(tpl, core.Banner, version, runtime.GOOS+"/"+runtime.GOARCH, buildTime, commit)
-}
-
-func prerun(_ *cobra.Command, _ []string) {
-	if err := core.LoadManifests(); err != nil {
-		logrus.Fatalf("failed to load manifests: %s", err)
-	}
-}
-
-func boot(name string, opt *core.SyncOption) {
-	sigs := make(chan os.Signal)
-	ctx, cancel := context.WithCancel(context.Background())
-	var cancelOnce sync.Once
-	defer cancel()
-	go func() {
-		for range sigs {
-			cancelOnce.Do(func() {
-				logrus.Info("Receiving a termination signal, gracefully shutdown!")
-				cancel()
-			})
-			logrus.Info("The goroutines pool has stopped, please wait for the remaining tasks to complete.")
-		}
-	}()
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	core.NewSynchronizer(name).Sync(ctx, opt)
+	rootCmd.AddCommand(syncCmd)
+	syncCmd.PersistentFlags().StringVar(&syncOption.User, "user", "", "docker hub user")
+	syncCmd.PersistentFlags().StringVar(&syncOption.Password, "password", "", "docker hub user password")
+	syncCmd.PersistentFlags().StringVar(&syncOption.NameSpace, "namespace", "google-containers", "google container registry namespace")
+	syncCmd.PersistentFlags().DurationVar(&syncOption.Timeout, "timeout", core.DefaultSyncTimeout, "sync single image timeout")
+	syncCmd.PersistentFlags().BoolVar(&syncOption.OnlyDownloadManifests, "download-manifests", false, "only download manifests")
+	syncCmd.PersistentFlags().StringVar(&core.ManifestDir, "manifests", "manifests", "manifests storage dir")
 }
